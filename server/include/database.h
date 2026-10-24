@@ -14,6 +14,10 @@ typedef struct {
     int p2_elo_before;
     int p1_elo_after;
     int p2_elo_after;
+    char player1_board[2048];
+    char player2_board[2048];
+    char player1_ships[2048];
+    char player2_ships[2048];
     char start_time[32];
     char end_time[32];
 } MatchRecord;
@@ -40,9 +44,11 @@ int db_get_user_elo(const char *username, int *out_elo);
 int db_update_elo(const char *username, int new_elo, int win, int loss, int draw);
 
 int db_create_match(const char *match_id, const char *player1, const char *player2, int p1_elo, int p2_elo);
+int db_save_match_boards(const char *match_id, const char *p1_board, const char *p2_board, const char *p1_ships, const char *p2_ships);
 int db_save_match_result(const char *match_id, const char *winner, const char *result, int p1_elo_after, int p2_elo_after);
 int db_log_move(const char *match_id, const char *player, int row, int col, const char *result, int sunk, int ship_size, int move_num);
 
+int db_get_match_by_id(const char *match_id, MatchRecord *out_record);
 int db_get_history(const char *username, int limit, MatchRecord **out_records, int *out_count);
 void db_free_history(MatchRecord *records);
 

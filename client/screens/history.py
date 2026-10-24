@@ -113,6 +113,9 @@ class HistoryScreen(BaseScreen):
             self.game_state.replay_player1 = msg.get("player1", "Player 1")
             self.game_state.replay_player2 = msg.get("player2", "Player 2")
             self.game_state.replay_winner = msg.get("winner", "")
+            self.game_state.replay_result = msg.get("result", "")
+            self.game_state.replay_player1_ships = msg.get("player1_ships", [])
+            self.game_state.replay_player2_ships = msg.get("player2_ships", [])
             self.next_screen = "replay"
 
     def draw(self) -> None:
@@ -183,13 +186,20 @@ class HistoryScreen(BaseScreen):
                 # Result
                 winner = m.get("winner", "")
                 res_type = str(m.get("result", "")).upper()
+                user_res = str(m.get("user_result", "")).upper()
 
-                if winner == self.game_state.username or res_type == "WIN":
+                if user_res == "WIN" or (winner and winner == self.game_state.username):
                     res_str = "WIN"
                     res_col = COLOR_SUCCESS
-                elif res_type in ("DRAW", "TIE") or winner.upper() == "DRAW":
+                elif user_res in ("DRAW", "TIE") or res_type in ("DRAW", "TIE") or (not winner and res_type not in ("ONGOING",)):
                     res_str = "DRAW"
                     res_col = COLOR_WARNING
+                elif user_res in ("LOSS", "LOSE") or (winner and winner != self.game_state.username):
+                    res_str = "LOSS"
+                    res_col = COLOR_DANGER
+                elif res_type == "ONGOING" or user_res == "ONGOING":
+                    res_str = "ONGOING"
+                    res_col = COLOR_TEXT_MUTED
                 else:
                     res_str = "LOSS"
                     res_col = COLOR_DANGER

@@ -587,6 +587,19 @@ static void handle_history_msg(ClientInfo *client, cJSON *root) {
         cJSON_AddStringToObject(item, "player2", records[i].player2);
         cJSON_AddStringToObject(item, "winner", records[i].winner);
         cJSON_AddStringToObject(item, "result", records[i].result);
+
+        const char *user_res = "DRAW";
+        if (strlen(records[i].winner) > 0) {
+            if (strcmp(records[i].winner, client->username) == 0) {
+                user_res = "WIN";
+            } else {
+                user_res = "LOSS";
+            }
+        } else if (strcmp(records[i].result, "ONGOING") == 0) {
+            user_res = "ONGOING";
+        }
+        cJSON_AddStringToObject(item, "user_result", user_res);
+
         cJSON_AddNumberToObject(item, "player1_elo_before", records[i].p1_elo_before);
         cJSON_AddNumberToObject(item, "player2_elo_before", records[i].p2_elo_before);
         cJSON_AddNumberToObject(item, "player1_elo_after", records[i].p1_elo_after);

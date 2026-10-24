@@ -13,6 +13,10 @@ char* get_replay_json(const char *match_id) {
         return NULL;
     }
 
+    /* Fetch match metadata for player names, winner, and ship data */
+    MatchRecord match_rec;
+    int has_match = (db_get_match_by_id(match_id, &match_rec) == 0);
+
     cJSON *root = cJSON_CreateObject();
     if (!root) {
         db_free_replay(moves);
@@ -21,6 +25,28 @@ char* get_replay_json(const char *match_id) {
 
     cJSON_AddStringToObject(root, "type", "REPLAY_DATA");
     cJSON_AddStringToObject(root, "match_id", match_id);
+
+    /* Add match metadata */
+    if (has_match) {
+        cJSON_AddStringToObject(root, "player1", match_rec.player1);
+        cJSON_AddStringToObject(root, "player2", match_rec.player2);
+        cJSON_AddStringToObject(root, "winner", match_rec.winner);
+        cJSON_AddStringToObject(root, "result", match_rec.result);
+
+        /* Add ship placement data as raw JSON strings (they are already JSON arrays) */
+        if (strlen(match_rec.player1_ships) > 0) {
+            cJSON *p1_ships = cJSON_Parse(match_rec.player1_ships);
+            if (p1_ships) {
+                cJSON_AddItemToObject(root, "player1_ships", p1_ships);
+            }
+        }
+        if (strlen(match_rec.player2_ships) > 0) {
+            cJSON *p2_ships = cJSON_Parse(match_rec.player2_ships);
+            if (p2_ships) {
+                cJSON_AddItemToObject(root, "player2_ships", p2_ships);
+            }
+        }
+    }
 
     cJSON *arr = cJSON_CreateArray();
     if (arr) {

@@ -12,6 +12,29 @@
 static Game *g_games_head = NULL;
 static pthread_mutex_t g_games_mutex = PTHREAD_MUTEX_INITIALIZER;
 
+char* serialize_board_ships(const Board *board) {
+    if (!board) return NULL;
+
+    cJSON *arr = cJSON_CreateArray();
+    if (!arr) return NULL;
+
+    for (int i = 0; i < NUM_SHIPS; i++) {
+        if (!board->ships[i].is_placed) continue;
+        cJSON *ship_obj = cJSON_CreateObject();
+        if (!ship_obj) continue;
+        cJSON_AddNumberToObject(ship_obj, "id", board->ships[i].id);
+        cJSON_AddNumberToObject(ship_obj, "size", board->ships[i].size);
+        cJSON_AddNumberToObject(ship_obj, "row", board->ships[i].row);
+        cJSON_AddNumberToObject(ship_obj, "col", board->ships[i].col);
+        cJSON_AddNumberToObject(ship_obj, "direction", board->ships[i].direction);
+        cJSON_AddItemToArray(arr, ship_obj);
+    }
+
+    char *json_str = cJSON_PrintUnformatted(arr);
+    cJSON_Delete(arr);
+    return json_str;
+}
+
 void game_manager_init(void) {
     pthread_mutex_lock(&g_games_mutex);
     g_games_head = NULL;
@@ -210,6 +233,15 @@ void finish_and_record_game(Game *g, const char *winner, const char *reason) {
     int p2_win = p1_loss;
     int p2_loss = p1_win;
     int draw_val = is_draw ? 1 : 0;
+
+    /* Serialize board ship positions as JSON for replay */
+    char *p1_ships_json = serialize_board_ships(&g->board1);
+    char *p2_ships_json = serialize_board_ships(&g->board2);
+    if (p1_ships_json && p2_ships_json) {
+        db_save_match_boards(g->match_id, NULL, NULL, p1_ships_json, p2_ships_json);
+    }
+    if (p1_ships_json) free(p1_ships_json);
+    if (p2_ships_json) free(p2_ships_json);
 
     db_save_match_result(g->match_id, winner, reason, new_elo1, new_elo2);
     db_update_elo(g->player1, new_elo1, p1_win, p1_loss, draw_val);

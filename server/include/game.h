@@ -68,6 +68,7 @@ int handle_draw_reply(const char *username, const char *match_id, int accept,
                       char *out_p1, char *out_p2, int *out_p1_fd, int *out_p2_fd, char *err_msg, size_t err_size);
 int handle_disconnect_game(const char *username, char *out_match_id, char *out_winner, int *out_winner_fd);
 void finish_and_record_game(Game *game, const char *winner, const char *reason);
+char* serialize_board_ships(const Board *board);
 void remove_game(const char *match_id);
 char* get_replay_json(const char *match_id);
 void game_manager_cleanup(void);

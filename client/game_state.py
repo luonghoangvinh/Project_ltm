@@ -51,6 +51,9 @@ class GameState:
         self.replay_player1: str = ""
         self.replay_player2: str = ""
         self.replay_winner: str = ""
+        self.replay_result: str = ""
+        self.replay_player1_ships: List[Dict[str, Any]] = []
+        self.replay_player2_ships: List[Dict[str, Any]] = []
 
         # Notification / Error toast
         self.notification: str = ""

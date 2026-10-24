@@ -34,6 +34,10 @@ static const char *SCHEMA_SQL =
     "    player2_elo_before INTEGER,\n"
     "    player1_elo_after INTEGER,\n"
     "    player2_elo_after INTEGER,\n"
+    "    player1_board TEXT,\n"
+    "    player2_board TEXT,\n"
+    "    player1_ships TEXT,\n"
+    "    player2_ships TEXT,\n"
     "    start_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,\n"
     "    end_time DATETIME,\n"
     "    FOREIGN KEY(player1) REFERENCES users(username),\n"
@@ -81,6 +85,12 @@ int db_init(const char *db_path) {
         pthread_mutex_unlock(&g_db_mutex);
         return -1;
     }
+
+    /* Safe migrations for existing databases */
+    sqlite3_exec(g_db, "ALTER TABLE matches ADD COLUMN player1_board TEXT;", NULL, NULL, NULL);
+    sqlite3_exec(g_db, "ALTER TABLE matches ADD COLUMN player2_board TEXT;", NULL, NULL, NULL);
+    sqlite3_exec(g_db, "ALTER TABLE matches ADD COLUMN player1_ships TEXT;", NULL, NULL, NULL);
+    sqlite3_exec(g_db, "ALTER TABLE matches ADD COLUMN player2_ships TEXT;", NULL, NULL, NULL);
 
     pthread_mutex_unlock(&g_db_mutex);
     return 0;
@@ -247,6 +257,44 @@ int db_create_match(const char *match_id, const char *player1, const char *playe
     return (rc == SQLITE_DONE) ? 0 : -1;
 }
 
+int db_save_match_boards(const char *match_id, const char *p1_board, const char *p2_board, const char *p1_ships, const char *p2_ships) {
+    if (!match_id) return -1;
+
+    pthread_mutex_lock(&g_db_mutex);
+    if (!g_db) {
+        pthread_mutex_unlock(&g_db_mutex);
+        return -1;
+    }
+
+    const char *sql = "UPDATE matches SET player1_board = ?, player2_board = ?, player1_ships = ?, player2_ships = ? WHERE id = ?;";
+    sqlite3_stmt *stmt = NULL;
+    int rc = sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        pthread_mutex_unlock(&g_db_mutex);
+        return -1;
+    }
+
+    if (p1_board && strlen(p1_board) > 0) sqlite3_bind_text(stmt, 1, p1_board, -1, SQLITE_STATIC);
+    else sqlite3_bind_null(stmt, 1);
+
+    if (p2_board && strlen(p2_board) > 0) sqlite3_bind_text(stmt, 2, p2_board, -1, SQLITE_STATIC);
+    else sqlite3_bind_null(stmt, 2);
+
+    if (p1_ships && strlen(p1_ships) > 0) sqlite3_bind_text(stmt, 3, p1_ships, -1, SQLITE_STATIC);
+    else sqlite3_bind_null(stmt, 3);
+
+    if (p2_ships && strlen(p2_ships) > 0) sqlite3_bind_text(stmt, 4, p2_ships, -1, SQLITE_STATIC);
+    else sqlite3_bind_null(stmt, 4);
+
+    sqlite3_bind_text(stmt, 5, match_id, -1, SQLITE_STATIC);
+
+    rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+
+    pthread_mutex_unlock(&g_db_mutex);
+    return (rc == SQLITE_DONE) ? 0 : -1;
+}
+
 int db_save_match_result(const char *match_id, const char *winner, const char *result, int p1_elo_after, int p2_elo_after) {
     pthread_mutex_lock(&g_db_mutex);
     if (!g_db) {
@@ -394,6 +442,80 @@ void db_free_history(MatchRecord *records) {
     if (records) {
         free(records);
     }
+}
+
+int db_get_match_by_id(const char *match_id, MatchRecord *out_record) {
+    if (!match_id || !out_record) return -1;
+    memset(out_record, 0, sizeof(MatchRecord));
+
+    pthread_mutex_lock(&g_db_mutex);
+    if (!g_db) {
+        pthread_mutex_unlock(&g_db_mutex);
+        return -1;
+    }
+
+    const char *sql = "SELECT id, player1, player2, COALESCE(winner, ''), result, "
+                      "player1_elo_before, player2_elo_before, "
+                      "COALESCE(player1_elo_after, 0), COALESCE(player2_elo_after, 0), "
+                      "COALESCE(start_time, ''), COALESCE(end_time, ''), "
+                      "COALESCE(player1_board, ''), COALESCE(player2_board, ''), "
+                      "COALESCE(player1_ships, ''), COALESCE(player2_ships, '') "
+                      "FROM matches WHERE id = ? LIMIT 1;";
+    sqlite3_stmt *stmt = NULL;
+    int rc = sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        pthread_mutex_unlock(&g_db_mutex);
+        return -1;
+    }
+
+    sqlite3_bind_text(stmt, 1, match_id, -1, SQLITE_STATIC);
+
+    int found = -1;
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        const char *t = (const char *)sqlite3_column_text(stmt, 0);
+        if (t) strncpy(out_record->match_id, t, sizeof(out_record->match_id) - 1);
+
+        t = (const char *)sqlite3_column_text(stmt, 1);
+        if (t) strncpy(out_record->player1, t, sizeof(out_record->player1) - 1);
+
+        t = (const char *)sqlite3_column_text(stmt, 2);
+        if (t) strncpy(out_record->player2, t, sizeof(out_record->player2) - 1);
+
+        t = (const char *)sqlite3_column_text(stmt, 3);
+        if (t) strncpy(out_record->winner, t, sizeof(out_record->winner) - 1);
+
+        t = (const char *)sqlite3_column_text(stmt, 4);
+        if (t) strncpy(out_record->result, t, sizeof(out_record->result) - 1);
+
+        out_record->p1_elo_before = sqlite3_column_int(stmt, 5);
+        out_record->p2_elo_before = sqlite3_column_int(stmt, 6);
+        out_record->p1_elo_after = sqlite3_column_int(stmt, 7);
+        out_record->p2_elo_after = sqlite3_column_int(stmt, 8);
+
+        t = (const char *)sqlite3_column_text(stmt, 9);
+        if (t) strncpy(out_record->start_time, t, sizeof(out_record->start_time) - 1);
+
+        t = (const char *)sqlite3_column_text(stmt, 10);
+        if (t) strncpy(out_record->end_time, t, sizeof(out_record->end_time) - 1);
+
+        t = (const char *)sqlite3_column_text(stmt, 11);
+        if (t) strncpy(out_record->player1_board, t, sizeof(out_record->player1_board) - 1);
+
+        t = (const char *)sqlite3_column_text(stmt, 12);
+        if (t) strncpy(out_record->player2_board, t, sizeof(out_record->player2_board) - 1);
+
+        t = (const char *)sqlite3_column_text(stmt, 13);
+        if (t) strncpy(out_record->player1_ships, t, sizeof(out_record->player1_ships) - 1);
+
+        t = (const char *)sqlite3_column_text(stmt, 14);
+        if (t) strncpy(out_record->player2_ships, t, sizeof(out_record->player2_ships) - 1);
+
+        found = 0;
+    }
+
+    sqlite3_finalize(stmt);
+    pthread_mutex_unlock(&g_db_mutex);
+    return found;
 }
 
 int db_get_replay_moves(const char *match_id, MoveRecord **out_moves, int *out_count) {

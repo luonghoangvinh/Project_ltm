@@ -59,12 +59,28 @@ class ReplayScreen(BaseScreen):
         self.last_move_info: str = "Ready to start replay."
 
         # Board states up to current_step
+        # These boards use the "my_board" convention: 0=empty, 1=ship, 2=hit, 3=miss
         self.p1_board = self._create_empty_board()
         self.p2_board = self._create_empty_board()
 
     @staticmethod
     def _create_empty_board() -> List[List[int]]:
         return [[0 for _ in range(GRID_SIZE)] for _ in range(GRID_SIZE)]
+
+    def _get_ship_cells(self, ships_data: List[Dict[str, Any]]) -> List[Tuple[int, int]]:
+        """Compute all cells occupied by ships from placement data."""
+        cells = []
+        for ship in ships_data:
+            row = int(ship.get("row", 0))
+            col = int(ship.get("col", 0))
+            size = int(ship.get("size", 0))
+            direction = int(ship.get("direction", 0))
+            for i in range(size):
+                if direction == 0:  # Horizontal
+                    cells.append((row, col + i))
+                else:  # Vertical
+                    cells.append((row + i, col))
+        return cells
 
     def on_enter(self) -> None:
         super().on_enter()
@@ -81,18 +97,39 @@ class ReplayScreen(BaseScreen):
             self.game_state.replay_player1 = msg.get("player1", "Player 1")
             self.game_state.replay_player2 = msg.get("player2", "Player 2")
             self.game_state.replay_winner = msg.get("winner", "")
+            self.game_state.replay_result = msg.get("result", "")
+            self.game_state.replay_player1_ships = msg.get("player1_ships", [])
+            self.game_state.replay_player2_ships = msg.get("player2_ships", [])
             self.moves = self.game_state.replay_moves
             self.current_step = 0
             self.auto_playing = False
             self._recompute_boards()
 
     def _recompute_boards(self) -> None:
-        """Rebuilds the board states by executing moves from index 0 to current_step - 1."""
+        """Rebuilds the board states by placing ships then executing moves up to current_step.
+
+        Board cell values follow the my_board convention:
+        0=empty, 1=ship, 2=hit on ship, 3=miss on empty water
+        """
         self.p1_board = self._create_empty_board()
         self.p2_board = self._create_empty_board()
 
         p1_name = self.game_state.replay_player1 or "Player 1"
         p2_name = self.game_state.replay_player2 or "Player 2"
+
+        # Place ships on each board (Bug 3 fix: use actual ship data for EACH player)
+        p1_ships = getattr(self.game_state, 'replay_player1_ships', []) or []
+        p2_ships = getattr(self.game_state, 'replay_player2_ships', []) or []
+
+        p1_ship_cells = set(self._get_ship_cells(p1_ships))
+        p2_ship_cells = set(self._get_ship_cells(p2_ships))
+
+        for r, c in p1_ship_cells:
+            if 0 <= r < GRID_SIZE and 0 <= c < GRID_SIZE:
+                self.p1_board[r][c] = 1  # Ship
+        for r, c in p2_ship_cells:
+            if 0 <= r < GRID_SIZE and 0 <= c < GRID_SIZE:
+                self.p2_board[r][c] = 1  # Ship
 
         if not self.moves or self.current_step == 0:
             self.last_move_info = "Move 0: Initial battle setup."
@@ -106,13 +143,20 @@ class ReplayScreen(BaseScreen):
             r = int(m.get("row", 0))
             c = int(m.get("col", 0))
             res = str(m.get("result", "MISS")).upper()
-            val = 1 if res == "HIT" else 2
 
             # The victim board receives the shot
             if shooter == p1_name:
-                self.p2_board[r][c] = val
+                # P1 fires at P2's board
+                if res == "HIT":
+                    self.p2_board[r][c] = 2  # Hit on ship
+                else:
+                    self.p2_board[r][c] = 3  # Miss
             else:
-                self.p1_board[r][c] = val
+                # P2 fires at P1's board
+                if res == "HIT":
+                    self.p1_board[r][c] = 2  # Hit on ship
+                else:
+                    self.p1_board[r][c] = 3  # Miss
 
         if last_move:
             shooter = last_move.get("player", "Player")
@@ -215,8 +259,57 @@ class ReplayScreen(BaseScreen):
         mid_text = f"Match ID: {self.game_state.match_id}"
         self.draw_text(mid_text, WINDOW_WIDTH // 2, 54, color=COLOR_TEXT_MUTED, size=14, center=True)
 
+        # Determine player identity relative to current viewer (Bug 2 fix)
         p1_name = self.game_state.replay_player1 or "Player 1"
         p2_name = self.game_state.replay_player2 or "Player 2"
+        current_user = self.game_state.username
+        winner = self.game_state.replay_winner or ""
+        result_type = getattr(self.game_state, 'replay_result', '') or ""
+
+        # Build display labels with You/Opponent markers
+        if current_user == p1_name:
+            left_label = f"{p1_name} (You)"
+            right_label = f"{p2_name} (Opponent)"
+        elif current_user == p2_name:
+            left_label = f"{p1_name} (Opponent)"
+            right_label = f"{p2_name} (You)"
+        else:
+            left_label = p1_name
+            right_label = p2_name
+
+        # Determine result for each player
+        if result_type.upper() == "DRAW":
+            p1_result_str = "Draw"
+            p1_result_col = COLOR_WARNING
+            p2_result_str = "Draw"
+            p2_result_col = COLOR_WARNING
+        elif winner == p1_name:
+            p1_result_str = "Winner"
+            p1_result_col = COLOR_SUCCESS
+            p2_result_str = "Loser"
+            p2_result_col = COLOR_DANGER
+        elif winner == p2_name:
+            p1_result_str = "Loser"
+            p1_result_col = COLOR_DANGER
+            p2_result_str = "Winner"
+            p2_result_col = COLOR_SUCCESS
+        else:
+            p1_result_str = ""
+            p1_result_col = COLOR_TEXT_MUTED
+            p2_result_str = ""
+            p2_result_col = COLOR_TEXT_MUTED
+
+        # Player info line (y=78)
+        left_info = f"{left_label}"
+        right_info = f"{right_label}"
+        self.draw_text(left_info, self.p1_board_x + (GRID_SIZE * CELL_SIZE) // 2, 80, color=COLOR_TEXT_WHITE, size=15, bold=True, center=True)
+        self.draw_text(right_info, self.p2_board_x + (GRID_SIZE * CELL_SIZE) // 2, 80, color=COLOR_TEXT_WHITE, size=15, bold=True, center=True)
+
+        # Result tags (y=98)
+        if p1_result_str:
+            self.draw_text(p1_result_str, self.p1_board_x + (GRID_SIZE * CELL_SIZE) // 2, 98, color=p1_result_col, size=14, bold=True, center=True)
+        if p2_result_str:
+            self.draw_text(p2_result_str, self.p2_board_x + (GRID_SIZE * CELL_SIZE) // 2, 98, color=p2_result_col, size=14, bold=True, center=True)
 
         # Determine last fired cell to highlight
         p1_highlight = None
@@ -229,24 +322,24 @@ class ReplayScreen(BaseScreen):
             else:
                 p1_highlight = (lr, lc)
 
-        # Draw Player 1 Board (Left)
-        p1_title = f"{p1_name}'s Board (Defending)"
+        # Draw Player 1 Board (Left) — shows P1's ships being attacked
+        p1_title = f"{p1_name}'s Board"
         self.draw_grid(
             top_left_x=self.p1_board_x,
             top_left_y=self.p1_board_y,
             board_data=self.p1_board,
-            is_enemy=True,
+            is_enemy=False,
             hover_cell=p1_highlight,
             title=p1_title,
         )
 
-        # Draw Player 2 Board (Right)
-        p2_title = f"{p2_name}'s Board (Defending)"
+        # Draw Player 2 Board (Right) — shows P2's ships being attacked
+        p2_title = f"{p2_name}'s Board"
         self.draw_grid(
             top_left_x=self.p2_board_x,
             top_left_y=self.p2_board_y,
             board_data=self.p2_board,
-            is_enemy=True,
+            is_enemy=False,
             hover_cell=p2_highlight,
             title=p2_title,
         )
