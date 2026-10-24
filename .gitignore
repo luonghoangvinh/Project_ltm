@@ -1,0 +1,32 @@
+# Database files
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+battleship.db
+
+# Build artifacts
+server/build/
+*.o
+*.a
+*.so
+*.exe
+
+# Configuration with credentials
+server/config/server.conf
+.env
+
+# Python bytecode & virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+env/
+
+# Logs and PID files
+*.log
+server.pid
+
+# Scratch and test artifacts
+scratch/
