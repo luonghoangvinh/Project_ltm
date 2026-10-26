@@ -17,8 +17,9 @@ static void handle_client_disconnect(ClientInfo *client) {
     if (strlen(client->username) > 0) {
         printf("[INFO] Client '%s' disconnected (fd=%d)\n", client->username, client->fd);
 
-        /* Cancel any pending matchmaking challenges */
+        /* Cancel any pending matchmaking challenges and remove from matchmaking queue */
         cancel_challenges_for_user(client->username);
+        matchmaking_queue_remove(client->username);
 
         /* Handle match disconnect if player was in an active game */
         char match_id[64] = {0};
@@ -136,6 +137,7 @@ static void handle_logout(ClientInfo *client, const char *token) {
     int win_fd = -1;
     handle_disconnect_game(client->username, match_id, winner, &win_fd);
     cancel_challenges_for_user(client->username);
+    matchmaking_queue_remove(client->username);
 
     pthread_mutex_lock(&g_server.clients_mutex);
     client->username[0] = '\0';
@@ -175,6 +177,7 @@ static void handle_list_players(ClientInfo *client) {
             const char *st = "ONLINE";
             if (g_server.clients[i].status == STATUS_IN_LOBBY) st = "IN_LOBBY";
             else if (g_server.clients[i].status == STATUS_IN_GAME) st = "IN_GAME";
+            else if (g_server.clients[i].status == STATUS_MATCHMAKING) st = "MATCHMAKING";
 
             cJSON_AddStringToObject(p, "status", st);
             cJSON_AddItemToArray(arr, p);
@@ -193,6 +196,11 @@ static void handle_list_players(ClientInfo *client) {
 }
 
 static void handle_challenge(ClientInfo *client, cJSON *root) {
+    if (client->status == STATUS_MATCHMAKING) {
+        send_error(client->fd, "You cannot challenge while searching for a match. Cancel matchmaking first.");
+        return;
+    }
+
     cJSON *target_item = cJSON_GetObjectItemCaseSensitive(root, "target");
     if (!cJSON_IsString(target_item)) {
         target_item = cJSON_GetObjectItemCaseSensitive(root, "opponent");
@@ -235,6 +243,73 @@ static void handle_challenge_reply(ClientInfo *client, cJSON *root) {
     int accept = cJSON_IsTrue(acc_item) ? 1 : 0;
     if (reply_challenge(client->username, mid_item->valuestring, accept, err, sizeof(err)) != 0) {
         send_error(client->fd, err);
+    }
+}
+
+/* Xử lý yêu cầu tham gia hàng chờ tìm trận (Random Matchmaking) */
+static void handle_find_match(ClientInfo *client) {
+    if (!client || strlen(client->username) == 0) return;
+
+    if (client->status == STATUS_IN_GAME) {
+        send_error(client->fd, "You are currently in a game");
+        return;
+    }
+
+    if (matchmaking_is_queued(client->username)) {
+        cJSON *resp = cJSON_CreateObject();
+        cJSON_AddStringToObject(resp, "type", "FIND_MATCH_RESPONSE");
+        cJSON_AddStringToObject(resp, "status", "ALREADY_QUEUED");
+        cJSON_AddStringToObject(resp, "message", "Already in matchmaking queue");
+        char *s = cJSON_PrintUnformatted(resp);
+        cJSON_Delete(resp);
+        if (s) {
+            send_message(client->fd, s);
+            free(s);
+        }
+        return;
+    }
+
+    int res = matchmaking_queue_add(client->username);
+    if (res == 0 || res == 1) {
+        if (client->status != STATUS_IN_GAME) {
+            set_client_status(client->username, STATUS_MATCHMAKING);
+        }
+        broadcast_player_update();
+
+        cJSON *resp = cJSON_CreateObject();
+        cJSON_AddStringToObject(resp, "type", "FIND_MATCH_RESPONSE");
+        cJSON_AddStringToObject(resp, "status", "QUEUED");
+        cJSON_AddStringToObject(resp, "message", "Joined matchmaking queue");
+        char *s = cJSON_PrintUnformatted(resp);
+        cJSON_Delete(resp);
+        if (s) {
+            send_message(client->fd, s);
+            free(s);
+        }
+    } else {
+        send_error(client->fd, "Failed to join matchmaking queue");
+    }
+}
+
+/* Xử lý hủy tìm trận */
+static void handle_cancel_find_match(ClientInfo *client) {
+    if (!client || strlen(client->username) == 0) return;
+
+    matchmaking_queue_remove(client->username);
+    if (client->status == STATUS_MATCHMAKING) {
+        set_client_status(client->username, STATUS_IN_LOBBY);
+    }
+    broadcast_player_update();
+
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddStringToObject(resp, "type", "CANCEL_FIND_MATCH_RESPONSE");
+    cJSON_AddStringToObject(resp, "status", "CANCELLED");
+    cJSON_AddStringToObject(resp, "message", "Left matchmaking queue");
+    char *s = cJSON_PrintUnformatted(resp);
+    cJSON_Delete(resp);
+    if (s) {
+        send_message(client->fd, s);
+        free(s);
     }
 }
 
@@ -691,6 +766,10 @@ void* client_thread_handler(void *arg) {
                 handle_logout(client, token_item->valuestring);
             } else if (strcmp(type, "LIST_PLAYERS") == 0) {
                 handle_list_players(client);
+            } else if (strcmp(type, "FIND_MATCH") == 0) {
+                handle_find_match(client);
+            } else if (strcmp(type, "CANCEL_FIND_MATCH") == 0 || strcmp(type, "CANCEL_MATCHMAKING") == 0) {
+                handle_cancel_find_match(client);
             } else if (strcmp(type, "CHALLENGE") == 0) {
                 handle_challenge(client, root);
             } else if (strcmp(type, "CHALLENGE_REPLY") == 0) {

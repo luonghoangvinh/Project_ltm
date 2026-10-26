@@ -29,9 +29,14 @@ class LobbyScreen(BaseScreen):
         super().__init__(surface, game_state, network)
 
         # Header buttons
+        self.btn_matchmaking_rect = pygame.Rect(WINDOW_WIDTH - 580, 24, 145, 42)
         self.btn_refresh_rect = pygame.Rect(WINDOW_WIDTH - 420, 24, 110, 42)
         self.btn_history_rect = pygame.Rect(WINDOW_WIDTH - 295, 24, 130, 42)
         self.btn_logout_rect = pygame.Rect(WINDOW_WIDTH - 150, 24, 110, 42)
+
+        # Matchmaking state
+        self.is_searching: bool = False
+        self.search_elapsed: float = 0.0
 
         # Main Table Panel
         self.table_rect = pygame.Rect(60, 100, WINDOW_WIDTH - 120, WINDOW_HEIGHT - 140)
@@ -49,6 +54,8 @@ class LobbyScreen(BaseScreen):
         self.game_state.reset_match()
         self.pending_challenge_to = None
         self.challenge_cooldown = 0.0
+        self.is_searching = False
+        self.search_elapsed = 0.0
         self.scroll_y = 0
         self._request_player_list()
 
@@ -74,16 +81,27 @@ class LobbyScreen(BaseScreen):
             mx, my = event.pos
 
             # Header buttons
+            if self.btn_matchmaking_rect.collidepoint((mx, my)):
+                if not self.is_searching:
+                    self._start_matchmaking()
+                else:
+                    self._cancel_matchmaking()
+                return
+
             if self.btn_refresh_rect.collidepoint((mx, my)):
                 self._request_player_list()
                 self.game_state.set_notification("Player list refreshed", duration=1.5, color=COLOR_PANEL_LIGHT)
                 return
 
             if self.btn_history_rect.collidepoint((mx, my)):
+                if self.is_searching:
+                    self._cancel_matchmaking()
                 self.next_screen = "history"
                 return
 
             if self.btn_logout_rect.collidepoint((mx, my)):
+                if self.is_searching:
+                    self._cancel_matchmaking()
                 self._handle_logout()
                 return
 
@@ -102,8 +120,33 @@ class LobbyScreen(BaseScreen):
                         is_self = (p.get("username") == self.game_state.username)
                         p_status = p.get("status", "ONLINE").upper()
                         is_available = p_status in ("ONLINE", "IN_LOBBY")
-                        if btn_rect.collidepoint((mx, my)) and not is_self and is_available and not self.pending_challenge_to:
-                            self._send_challenge(p.get("username", ""))
+                        if btn_rect.collidepoint((mx, my)):
+                            if self.is_searching:
+                                self.game_state.set_notification("Vui lòng hủy tìm trận trước khi thách đấu!", duration=2.5, color=COLOR_WARNING)
+                            elif not is_self and is_available and not self.pending_challenge_to:
+                                self._send_challenge(p.get("username", ""))
+
+    def _start_matchmaking(self) -> None:
+        """Gửi yêu cầu tham gia hàng chờ tìm trận ngẫu nhiên."""
+        if self.network.connected and self.game_state.session_token:
+            self.network.send({
+                "type": "FIND_MATCH",
+                "session_token": self.game_state.session_token,
+            })
+            self.is_searching = True
+            self.search_elapsed = 0.0
+            self.game_state.set_notification("Đang tìm trận... Đang ghép cặp với người chơi phù hợp.", duration=3.0, color=COLOR_PRIMARY)
+
+    def _cancel_matchmaking(self) -> None:
+        """Gửi yêu cầu hủy tìm trận."""
+        if self.network.connected and self.game_state.session_token:
+            self.network.send({
+                "type": "CANCEL_FIND_MATCH",
+                "session_token": self.game_state.session_token,
+            })
+        self.is_searching = False
+        self.search_elapsed = 0.0
+        self.game_state.set_notification("Đã rời hàng chờ tìm trận.", duration=2.0, color=COLOR_WARNING)
 
     def _send_challenge(self, target_user: str) -> None:
         if not target_user:
@@ -149,6 +192,8 @@ class LobbyScreen(BaseScreen):
                 self.game_state.set_notification(f"{opponent} declined the challenge.", duration=3.5, color=COLOR_WARNING)
 
         elif msg_type == "MATCH_FOUND":
+            self.is_searching = False
+            self.search_elapsed = 0.0
             self.pending_challenge_to = None
             self.close_modal()
             self.game_state.match_id = msg.get("match_id", "")
@@ -157,6 +202,15 @@ class LobbyScreen(BaseScreen):
             self.game_state.you_go_first = bool(msg.get("you_go_first", False))
             self.game_state.set_notification(f"Match found against {self.game_state.opponent}!", duration=2.0, color=COLOR_SUCCESS)
             self.next_screen = "place_ships"
+
+        elif msg_type == "FIND_MATCH_RESPONSE":
+            st = msg.get("status")
+            if st in ("QUEUED", "ALREADY_QUEUED"):
+                self.is_searching = True
+
+        elif msg_type == "CANCEL_FIND_MATCH_RESPONSE":
+            self.is_searching = False
+            self.search_elapsed = 0.0
 
     def _prompt_incoming_challenge(self, challenger: str, match_id: str) -> None:
         def on_accept():
@@ -190,6 +244,8 @@ class LobbyScreen(BaseScreen):
 
     def update(self, dt: float = 0.016) -> None:
         super().update(dt)
+        if self.is_searching:
+            self.search_elapsed += dt
         if self.challenge_cooldown > 0:
             self.challenge_cooldown -= dt
             if self.challenge_cooldown <= 0:
@@ -206,6 +262,12 @@ class LobbyScreen(BaseScreen):
         self.draw_text(user_badge, 340, 34, color=COLOR_SUCCESS, size=18, bold=True)
 
         # Header Buttons
+        mm_hover = self.btn_matchmaking_rect.collidepoint(mouse_pos)
+        if not self.is_searching:
+            self.draw_button(self.btn_matchmaking_rect, "Tìm trận", hover=mm_hover, bg_color=COLOR_SUCCESS, font_size=15)
+        else:
+            self.draw_button(self.btn_matchmaking_rect, f"Hủy tìm ({int(self.search_elapsed)}s)", hover=mm_hover, bg_color=COLOR_DANGER, font_size=14)
+
         ref_hover = self.btn_refresh_rect.collidepoint(mouse_pos)
         self.draw_button(self.btn_refresh_rect, "Refresh", hover=ref_hover, bg_color=COLOR_PANEL_LIGHT, font_size=15)
 
@@ -214,6 +276,17 @@ class LobbyScreen(BaseScreen):
 
         log_hover = self.btn_logout_rect.collidepoint(mouse_pos)
         self.draw_button(self.btn_logout_rect, "Logout", hover=log_hover, bg_color=COLOR_DANGER, font_size=15)
+
+        # Status text khi đang tìm trận
+        if self.is_searching:
+            self.draw_text(
+                f"Đang tìm đối thủ phù hợp (ELO ±100)... ({int(self.search_elapsed)}s)",
+                self.table_rect.x + 10,
+                self.table_rect.y - 25,
+                color=COLOR_PRIMARY_HOVER,
+                size=14,
+                bold=True,
+            )
 
         # Main Table Panel
         self.draw_panel(self.table_rect, bg_color=COLOR_PANEL, border_radius=10)
@@ -274,9 +347,13 @@ class LobbyScreen(BaseScreen):
                 self.draw_text(p_elo, self.table_rect.x + 360, row_y + 16, color=COLOR_TEXT_WHITE, size=16)
 
                 # Status badge
+                is_finding = p_status in ("MATCHMAKING", "FINDING")
                 is_available = p_status in ("ONLINE", "IN_LOBBY")
                 if is_available:
                     status_col = COLOR_SUCCESS
+                elif is_finding:
+                    status_col = COLOR_WARNING
+                    p_status = "FINDING"
                 elif p_status in ("IN_GAME", "PLAYING"):
                     status_col = COLOR_WARNING
                 else:
@@ -288,6 +365,8 @@ class LobbyScreen(BaseScreen):
                 btn_rect = pygame.Rect(self.table_rect.right - 150, row_y + 8, 120, 36)
                 if is_self:
                     self.draw_button(btn_rect, "You", disabled=True, font_size=14)
+                elif is_finding:
+                    self.draw_button(btn_rect, "Finding...", disabled=True, font_size=14, bg_color=COLOR_WARNING)
                 elif not is_available:
                     self.draw_button(btn_rect, "In Game", disabled=True, font_size=14)
                 elif self.pending_challenge_to == uname:

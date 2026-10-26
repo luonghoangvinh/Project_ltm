@@ -42,7 +42,8 @@ typedef enum {
     STATUS_OFFLINE = 0,
     STATUS_ONLINE,
     STATUS_IN_LOBBY,
-    STATUS_IN_GAME
+    STATUS_IN_GAME,
+    STATUS_MATCHMAKING
 } ClientStatus;
 
 /* Cell types */

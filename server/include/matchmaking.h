@@ -33,6 +33,27 @@ int challenge_player(const char *challenger, const char *target, char *out_match
 int reply_challenge(const char *replying_user, const char *match_id, int accept, char *err_msg, size_t err_size);
 
 void cancel_challenges_for_user(const char *username);
+
+/* === RANDOM MATCHMAKING QUEUE (TÌM TRẬN NGẪU NHIÊN) === */
+typedef struct QueuePlayer {
+    char username[32];
+    int elo;
+    time_t joined_at;
+    struct QueuePlayer *next;
+} QueuePlayer;
+
+/* Thêm người chơi vào hàng chờ tìm trận */
+int matchmaking_queue_add(const char *username);
+
+/* Xóa người chơi khỏi hàng chờ tìm trận */
+int matchmaking_queue_remove(const char *username);
+
+/* Kiểm tra người chơi có đang trong hàng chờ tìm trận không */
+int matchmaking_is_queued(const char *username);
+
+/* Xử lý ghép cặp người chơi trong hàng chờ */
+void matchmaking_process_queue(void);
+
 void matchmaking_cleanup(void);
 
 #endif /* MATCHMAKING_H */
